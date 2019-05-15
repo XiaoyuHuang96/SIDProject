@@ -17,7 +17,7 @@ transform_img = transforms.Compose([
                     ])
 
 class OurDataset(Data.Dataset):
-    def __init__(self,dir = '/home/huangxiaoyu/ourdataset/preprocessed/dark2light/',ps=512,type='train',imgtype='raw'):
+    def __init__(self,dir = '/home/hda/nfs_disk/dataset/dark2light/',ps=512,type='train',imgtype='raw',return_ratio=False):
         if(type=='train'):
             self.type='0'
         elif(type=='test'):
@@ -30,6 +30,9 @@ class OurDataset(Data.Dataset):
         else:
             self.fntype='JPG'
 
+
+        self.return_ratio=return_ratio
+
         self.input_dir=os.path.join(dir,imgtype,'images')
         self.gt_dir=os.path.join(dir,imgtype,'groundtruth')
 
@@ -38,6 +41,7 @@ class OurDataset(Data.Dataset):
 
         self.gt_images=[None]*2000
         self.input_images=[[None]*10 for i in range(2000)]
+
 
     def init_ids(self):
         train_fns=glob.glob(self.gt_dir+'/'+self.type+'*.CR2')
@@ -49,15 +53,14 @@ class OurDataset(Data.Dataset):
         self.train_ids=train_ids
 
 
-
-
     def pack_raw(self,raw):
         #pack Bayer image to 4 channels
-        im = raw.raw_image_visible.astype(np.float32)
+        # im = raw.raw_image_visible.astype(np.float32)
+        im = raw.raw_image_visible.astype(np.uint16)
         # print('im',im)
         # print('max',np.max(im))
         # print('min',np.min(im))
-        im = np.maximum(im - 2048,0)/ (16383 - 2048) #subtract the black level
+        im = np.maximum(im - 2048,0)#/ (16383 - 2048) #subtract the black level
         # print('after',im)
 
         im = np.expand_dims(im,axis=2)
@@ -85,17 +88,19 @@ class OurDataset(Data.Dataset):
         _, gt_fn = os.path.split(gt_path)
         in_exposure =  float(in_fn[9:-5])
         gt_exposure =  float(gt_fn[9:-5])
-
+        # print('in_exposure',in_exposure)
+        # print('gt_exposure',gt_exposure)
         ratio = min(gt_exposure/(in_exposure+0.0001),300)
 
         if self.input_images[ind][ridx] is None:
             raw = rawpy.imread(in_path)
-            self.input_images[ind][ridx] = np.expand_dims(self.pack_raw(raw),axis=0) *ratio
+            self.input_images[ind][ridx] = np.expand_dims(self.pack_raw(raw),axis=0)# *ratio
 
         if self.gt_images[ind] is None:
             gt_raw = rawpy.imread(gt_path)
             im = gt_raw.postprocess(use_camera_wb=True, half_size=False, no_auto_bright=True, output_bps=16)
-            self.gt_images[ind] = np.expand_dims(np.float32(im/65535.0),axis = 0)
+            # self.gt_images[ind] = np.expand_dims(np.float32(im/65535.0),axis = 0)
+            self.gt_images[ind] = np.expand_dims(im,axis = 0)
 
         #crop
         H = self.input_images[ind][ridx].shape[1]
@@ -104,8 +109,14 @@ class OurDataset(Data.Dataset):
 
         xx = np.random.randint(0,W-self.ps)
         yy = np.random.randint(0,H-self.ps)
-        input_patch = self.input_images[ind][ridx][0,yy:yy+self.ps,xx:xx+self.ps,:]
-        gt_patch = self.gt_images[ind][0,yy*2:yy*2+self.ps*2,xx*2:xx*2+self.ps*2,:]
+
+        in_img=self.input_images[ind][ridx][0,yy:yy+self.ps,xx:xx+self.ps,:]
+
+        input_patch = np.float32(in_img)/ (16383 - 2048)
+        if(self.return_ratio==False):
+            input_patch=input_patch*ratio
+        gt_img=self.gt_images[ind][0,yy*2:yy*2+self.ps*2,xx*2:xx*2+self.ps*2,:]
+        gt_patch = np.float32(gt_img/65535.0)
 
 
         if np.random.randint(2,size=1)[0] == 1:  # random flip
@@ -114,7 +125,6 @@ class OurDataset(Data.Dataset):
         if np.random.randint(2,size=1)[0] == 1:
             input_patch = np.flip(input_patch, axis=0)
             gt_patch = np.flip(gt_patch, axis=0)
-  
 
 
         input_patch = np.minimum(input_patch,1.0)
@@ -122,8 +132,11 @@ class OurDataset(Data.Dataset):
 
         in_img = torch.from_numpy(input_patch).permute(2,0,1)
         gt_img = torch.from_numpy(gt_patch).permute(2,0,1)
-        return in_img,gt_img
 
+        if(self.return_ratio):
+            return in_img,gt_img,ratio
+        else:
+            return in_img,gt_img
 
     def __len__(self):
         return len(self.train_ids)
